@@ -51,7 +51,7 @@ def postprocess(frame, outs):
             cv.rectangle(frame, (left, top - labelSize[1]), (left + labelSize[0], top + baseLine), (255, 255, 255), cv.FILLED)
             cv.putText(frame, label, (left, top), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0))
         except TypeError:
-            print('deu erro aqui')
+            pass
 
     layerNames = net.getLayerNames()
     lastLayerId = net.getLayerId(layerNames[-1])
