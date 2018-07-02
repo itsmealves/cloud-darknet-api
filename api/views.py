@@ -1,24 +1,28 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
+import os
 import cv2 as cv
+import numpy as np
+from PIL import Image
+from django.core.files import File
 from django.shortcuts import render
-from django.http import HttpResponse
 from django.views.generic.base import View
+from django.http import HttpResponse, JsonResponse
+from django.core.files.storage import default_storage
+
 
 # Create your views here.
-
-framework = 'darknet'
-config = 'yolov3-tiny.cfg'
-model = 'yolov3-tiny.weights'
+config = 'yolov3.cfg'
+model = 'yolov3.weights'
 
 def callback(pos):
     global confThreshold
     confThreshold = pos / 100.0
 
-net = cv.dnn.readNet(model, config, framework)
-net.setPreferableBackend(cv.dnn.DNN_BACKEND_DEFAULT)
+net = cv.dnn.readNet(config, model, 'darknet')
 net.setPreferableTarget(cv.dnn.DNN_TARGET_CPU)
+net.setPreferableBackend(cv.dnn.DNN_BACKEND_DEFAULT)
 
 classes = None
 confThreshold = 0.5
@@ -32,20 +36,22 @@ def postprocess(frame, outs):
     frameWidth = frame.shape[1]
 
     def drawPred(classId, conf, left, top, right, bottom):
-        # Draw a bounding box.
-        cv.rectangle(frame, (left, top), (right, bottom), (0, 255, 0))
+        try:
+            # Draw a bounding box.
+            cv.rectangle(frame, (int(left), int(top)), (int(right), int(bottom)), (255, 100, 80))
+            label = '%.2f' % conf
 
-        label = '%.2f' % conf
+            # Print a label of class.
+            if classes:
+                assert(classId < len(classes))
+                label = '%s: %s' % (classes[classId], label)
 
-        # Print a label of class.
-        if classes:
-            assert(classId < len(classes))
-            label = '%s: %s' % (classes[classId], label)
-
-        labelSize, baseLine = cv.getTextSize(label, cv.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        top = max(top, labelSize[1])
-        cv.rectangle(frame, (left, top - labelSize[1]), (left + labelSize[0], top + baseLine), (255, 255, 255), cv.FILLED)
-        cv.putText(frame, label, (left, top), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0))
+            labelSize, baseLine = cv.getTextSize(label, cv.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            top = max(top, labelSize[1])
+            cv.rectangle(frame, (left, top - labelSize[1]), (left + labelSize[0], top + baseLine), (255, 255, 255), cv.FILLED)
+            cv.putText(frame, label, (left, top), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0))
+        except TypeError:
+            print('deu erro aqui')
 
     layerNames = net.getLayerNames()
     lastLayerId = net.getLayerId(layerNames[-1])
@@ -114,33 +120,44 @@ def postprocess(frame, outs):
             drawPred(classIds[i], confidences[i], left, top, left + width, top + height)
 
 
-def run_detection(file):
-    image = Image.open(file.file)
+def run_detection(file, extension):
+    image = Image.open(file.file).resize((800, 800))
     matrix = np.array(image)
-    frame = matrix[:, : ::-1].copy()
-    
+    frame = matrix[:, :, ::-1].copy()
+
     frameHeight = frame.shape[0]
     frameWidth = frame.shape[1]
 
     # Create a 4D blob from a frame.
-    inpWidth = args.width if args.width else frameWidth
-    inpHeight = args.height if args.height else frameHeight
-    blob = cv.dnn.blobFromImage(frame, args.scale, (inpWidth, inpHeight), args.mean, args.rgb, crop=False)
+    blob = cv.dnn.blobFromImage(frame, 0.001, (frameWidth, frameHeight), [0, 0, 0], True, crop=False)
 
     # Run a model
     net.setInput(blob)
 
+    if net.getLayer(0).outputNameToIndex('im_info') != -1:  # Faster-RCNN or R-FCN
+        frame = cv.resize(frame, (inpWidth, inpHeight))
+        net.setInput(np.array([inpHeight, inpWidth, 1.6], dtype=np.float32), 'im_info')
+
     outs = net.forward(getOutputsNames(net))
     postprocess(frame, outs)
 
+    cv.imwrite('out.' + extension, frame)
+    return File(open('out.' + extension, 'r'))
+
 class DetectionView(View):
     def get(self, request):
-	return HttpResponse('How did you find me?')
+	    return HttpResponse('How did you find me?')
 
     def post(self, request):
-	file = request.FILES['file']
-	image = run_detection(file)
+        file = request.FILES['file']
+        file_name = request.POST.get('filename')
+        extension = file_name.split('.')[-1]
 
-	return stored_name
-    
+        with run_detection(file, extension) as image:
+            with default_storage.open(file_name, 'w') as destination:
+                for chunk in image.chunks():
+                    destination.write(chunk)
 
+	    return JsonResponse({
+            "url" : default_storage.url(file_name).split('?')[0]
+        })
